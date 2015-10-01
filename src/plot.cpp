@@ -4,6 +4,8 @@
 #include <sdo/LookupTable.hpp>
 #include <spline/PiecewisePolynomial.hpp>
 #include <spline/SplineApproximation.hpp>
+#include <spline/Derivative.hpp>
+#include <spline/SimplePolynomial.hpp>
 #include <iostream>
 #include <iomanip>
 #include <omp.h>
@@ -34,6 +36,7 @@ int main( int argc, char const *argv[] )
    while( std::getline( lookupsDat, lookupsLine ) )
    {
       std::size_t pos = lookupsLine.find( '=' );
+
       if( pos != std::string::npos )
       {
          std::string setting = lookupsLine.substr( 0, pos );
@@ -41,6 +44,7 @@ int main( int argc, char const *argv[] )
          boost::trim( setting );
          boost::trim( valstring );
          double val;
+
          try
          {
             val = boost::lexical_cast<double>( valstring );
@@ -73,8 +77,10 @@ int main( int argc, char const *argv[] )
             std::cerr << "warning: unknown option ignored '" << setting << "'\n";
             std::cerr << "supported options are: max_mixed_err, min_knot_distance, mixed_err_delta, obj_tolerance\n";
          }
+
          continue;
       }
+
       if( i == j )
       {
          double x, y;
@@ -101,7 +107,7 @@ int main( int argc, char const *argv[] )
    data_smooth << std::setprecision( 17 );
    data_err << std::setprecision( 17 );
    data_knots << std::setprecision( 17 );
-   double a, b, h;
+   double a, b;
    a = lookup.begin()->get<0>();
    b = ( lookup.end() - 1 )->get<0>();
    double xtd = ( b - a ) / 2;
@@ -119,11 +125,11 @@ int main( int argc, char const *argv[] )
    }
 
    data_linear << b << "\t" << ( lookup.end() - 1 )->get<1>() << std::endl;
-   spline::BSplineCurve<1, double> linear(lookup.getXvals(), lookup.getYvals());
+   spline::BSplineCurve<1, double> linear( lookup.getXvals(), lookup.getYvals() );
+
    double t = omp_get_wtime();
    double hmin = 1e-7;
    double rel_err = max_rel_err;
-   double hmax = ( b - a ) / 4;
    auto pp = spline::ApproximatePiecewiseLinear(
                 linear,
                 a,
@@ -134,9 +140,9 @@ int main( int argc, char const *argv[] )
                 minkntdistance
              );
 
-   double curveps = 1e-2;
-
    printf( "Fitting took %g seconds.\n", omp_get_wtime() - t );
+   auto dpp = spline::differentiate<1>( pp );
+   double curveps = 1e-2;
 
    double m = ( b - a );
 
@@ -150,44 +156,36 @@ int main( int argc, char const *argv[] )
    std::cout << "Curve has " << pp.numIntervals() << " intervals. The smallest has size " << std::setprecision( 17 ) <<  m << "\n";
    std::cout << "Maximum mixed error is " << rel_err << " (delta=" << delta << ")\n";
    double p = a;
-   double dcurr = pp.derivative<1>( p );
-   double d2curr = pp.derivative<2>( p );
-   double curr = pp( p );
 
    while( p <= b )
    {
+      double curr = pp( p );
+      double dcurr = pp.derivative<1>( p );
       data_smooth << boost::lexical_cast<std::string>( p ) << "\t"
                   << boost::lexical_cast<std::string>( curr ) << std::endl;
       data_err << boost::lexical_cast<std::string>( p ) << "\t"
-               <<  boost::lexical_cast<std::string>( std::abs( ( pp( p ) - lookup( p ) ) / ( std::abs( lookup( p ) ) + delta ) ) ) << "\n";
+               <<  boost::lexical_cast<std::string>( std::abs( ( curr - lookup( p ) ) / ( std::abs( lookup( p ) ) + delta ) ) ) << "\n";
 
-      h = hmax;
-      double dnext;
-      double d2next;
-      double next;
+      if( p == b )
+         break;
 
-      do
-      {
-         dnext = pp.derivative<1>( p + h );
-         d2next = pp.derivative<2>( p + h );
-         next = pp( p + h );
+      spline::SimplePolynomial<0, double> rhs;
+      double dmaxchange = ( eps + dcurr ) * curveps;
+      rhs.setCoeff( 0, dcurr - dmaxchange );
+      auto sols = dpp.solveEquation( rhs, p, b, eps );
+      double pnext = b;
 
-         if( std::abs( curr - next ) / ( curveps + curr ) <= curveps &&
-               std::abs( dcurr - dnext ) / ( curveps + dcurr ) <= curveps &&
-               std::abs( d2curr - d2next ) / ( curveps + d2curr ) <= curveps )
-            break;
+      if( !sols.empty() )
+         pnext = std::min( pnext, sols.front() );
 
-         h = std::max( h / 1.5, hmin );
-      }
-      while( h > hmin );
+      rhs.setCoeff( 0, dcurr + dmaxchange );
+      sols = dpp.solveEquation( rhs, p, b, eps );
 
-      if( b - p > eps )
-         h = std::min( b - p, h );
+      if( !sols.empty() )
+         pnext = std::min( pnext, sols.front() );
 
-      p += h;
-      d2curr = d2next;
-      curr = next;
-      dcurr = dnext;
+      p = std::max( p + hmin, pnext );
+
    }
 
 
