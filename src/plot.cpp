@@ -170,7 +170,7 @@ int main( int argc, char const *argv[] )
          break;
 
       spline::SimplePolynomial<0, double> rhs;
-      double dmaxchange = ( eps + dcurr ) * curveps;
+      double dmaxchange = ( curveps + std::abs(dcurr) ) * curveps;
       rhs.setCoeff( 0, dcurr - dmaxchange );
       auto sols = dpp.solveEquation( rhs, p, b, eps );
       double pnext = b;
@@ -185,7 +185,6 @@ int main( int argc, char const *argv[] )
          pnext = std::min( pnext, sols.front() );
 
       p = std::max( p + hmin, pnext );
-
    }
 
 
